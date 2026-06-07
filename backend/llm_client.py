@@ -20,13 +20,20 @@ class VLLMClient:
         max_tokens: int = 4096,
         temperature: float = 0.7,
         top_p: float = 0.95,
-        stop: Optional[List[str]] = None
+        stop: Optional[List[str]] = None,
+        system_prompt: Optional[str] = None
     ) -> str:
         """Generate text completion using vLLM API."""
         async with httpx.AsyncClient(timeout=self.timeout) as client:
+            # Try chat completions endpoint first (more reliable for most vLLM setups)
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+            
             payload = {
                 "model": self.model_name,
-                "prompt": prompt,
+                "messages": messages,
                 "max_tokens": max_tokens,
                 "temperature": temperature,
                 "top_p": top_p,
@@ -35,12 +42,31 @@ class VLLMClient:
             
             try:
                 response = await client.post(
-                    f"{self.api_url}/completions",
+                    f"{self.api_url}/chat/completions",
                     json=payload
                 )
                 response.raise_for_status()
                 result = response.json()
-                return result["choices"][0]["text"]
+                return result["choices"][0]["message"]["content"]
+            except httpx.HTTPStatusError as e:
+                # If chat endpoint fails, try completions endpoint as fallback
+                if e.response.status_code == 400:
+                    payload_completion = {
+                        "model": self.model_name,
+                        "prompt": f"{system_prompt}\n\n{prompt}" if system_prompt else prompt,
+                        "max_tokens": max_tokens,
+                        "temperature": temperature,
+                        "top_p": top_p,
+                        "stop": stop or []
+                    }
+                    response = await client.post(
+                        f"{self.api_url}/completions",
+                        json=payload_completion
+                    )
+                    response.raise_for_status()
+                    result = response.json()
+                    return result["choices"][0]["text"]
+                raise
             except httpx.HTTPError as e:
                 raise Exception(f"vLLM API error: {str(e)}")
     
@@ -78,9 +104,7 @@ class VLLMClient:
         regulatory_context: str = ""
     ) -> str:
         """Generate Software Development Document from requirements."""
-        prompt = f"""You are an expert software architect. Generate a comprehensive Software Development Document (SDD) based on the following business requirements.
-
-BUSINESS REQUIREMENTS:
+        prompt = f"""BUSINESS REQUIREMENTS:
 {business_requirements}
 
 REGULATORY CONTEXT:
@@ -99,7 +123,12 @@ Generate a detailed SDD including:
 
 Format the output in Markdown with clear sections and subsections."""
 
-        return await self.generate_completion(prompt, max_tokens=4096, temperature=0.5)
+        return await self.generate_completion(
+            prompt, 
+            max_tokens=4096, 
+            temperature=0.5,
+            system_prompt=settings.sdd_system_prompt
+        )
     
     async def search_regulatory_documents(
         self,
@@ -132,9 +161,7 @@ Return a JSON array of relevant sections with their relevance score (0-1) and ex
         change_request: str
     ) -> Dict[str, Any]:
         """Analyze code in context of a change request."""
-        prompt = f"""You are a senior software engineer. Analyze the following code in the context of this change request.
-
-CHANGE REQUEST:
+        prompt = f"""CHANGE REQUEST:
 {change_request}
 
 CODE:
@@ -149,7 +176,12 @@ Provide analysis in JSON format:
     "testing_requirements": ["list of required tests"]
 }}"""
 
-        response = await self.generate_completion(prompt, max_tokens=2048, temperature=0.3)
+        response = await self.generate_completion(
+            prompt, 
+            max_tokens=2048, 
+            temperature=0.3,
+            system_prompt=settings.code_analysis_system_prompt
+        )
         
         import json
         try:
