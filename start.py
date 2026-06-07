@@ -31,7 +31,7 @@ def main():
         print("\n   Continuing anyway (API calls will fail until vLLM is started)...")
     
     # Change to backend directory
-    os.chdir(os.path.join(os.path.dirname(__file__), 'backend'))
+    # os.chdir(os.path.join(os.path.dirname(__file__), 'backend'))
     
     # Start FastAPI server
     print("\n🔧 Starting FastAPI server...")
@@ -42,7 +42,7 @@ def main():
     try:
         subprocess.run([
             sys.executable, "-m", "uvicorn", 
-            "main:app", 
+            "backend.main:app", 
             "--host", "0.0.0.0", 
             "--port", "8080",
             "--reload"
